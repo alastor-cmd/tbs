@@ -4,6 +4,7 @@
 <meta charset="UTF-8">
 <title>ATM TBS · Ощадбанк</title>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/dist/umd/supabase.min.js"></script>
 <style>
 :root {
   --bg:#f5f5f4; --surface:#fff; --border:#d6d3d1; --border-strong:#a8a29e;
@@ -525,57 +526,7 @@ async function initDB() {
   }
 }
 
-function dbPut(storeName, obj) {
-  return new Promise((resolve, reject) => {
-    const tx = db.transaction(storeName, 'readwrite');
-    const store = tx.objectStore(storeName);
-    const req = store.put(obj);
-    req.onsuccess = () => resolve();
-    req.onerror = (e) => reject(e);
-  });
-}
-
-function serializeRow(row) {
-  const r = Object.assign({}, row);
-  // Серіалізуємо __meta
-  if (r.__meta) { r.__meta_json = JSON.stringify(r.__meta); delete r.__meta; }
-  // boolean -> 0/1 для надійності IndexedDB
-  ['dogovir','DIS','BEC','Limi','ТМК'].forEach(k => {
-    if (k in r) r[k] = r[k] ? 1 : 0;
-  });
-  return r;
-}
-
-function dbPutAll(storeName, items) {
-  return new Promise((resolve, reject) => {
-    if (!db) return resolve();
-    const tx = db.transaction(storeName, 'readwrite');
-    const store = tx.objectStore(storeName);
-    store.clear();
-    items.forEach(item => {
-      const s = serializeRow(item);
-      // Видаляємо _rowId щоб autoIncrement призначив новий
-      delete s._rowId;
-      store.add(s);
-    });
-    tx.oncomplete = () => resolve();
-    tx.onerror = (e) => reject(e);
-  });
-}
-
-// Зберегти один рядок (upsert за _rowId)
-function dbSaveRow(storeName, row) {
-  if (!db || !row._rowId) return dbPutAll(storeName, storeName==='atm'?sheets.active:sheets.zap);
-  return new Promise((resolve) => {
-    const tx = db.transaction(storeName, 'readwrite');
-    const s = serializeRow(row);
-    tx.objectStore(storeName).put(s);
-    tx.oncomplete = resolve;
-    tx.onerror = resolve;
-  });
-}
-
-function dbGetAll(s) { return Promise.resolve([]); }
+// (Мертвий код IndexedDB видалено — застосунок працює напряму з Supabase)
 function rowToSB(row, sheet) {
   return {
     atm_id:        row.ID             || '',
@@ -674,6 +625,45 @@ function dbAddLog(entry) {
 
 async function saveSheetToDB(s) { return saveAllToServer(); }
 
+// ===== REALTIME (жива синхронізація між користувачами) =====
+let _rtInited = false, _rtTimer = null;
+function setupRealtime() {
+  if (_rtInited || !window.supabase || !window.supabase.createClient) return;
+  _rtInited = true;
+  try {
+    const client = window.supabase.createClient(SB_URL, SB_KEY);
+    client.channel('atm_data_rt')
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'atm_data' }, () => scheduleRealtimeRefresh())
+      .subscribe();
+  } catch(e) { console.warn('Realtime init:', e); }
+}
+function scheduleRealtimeRefresh() {
+  clearTimeout(_rtTimer);
+  _rtTimer = setTimeout(() => {
+    // Не оновлюємо, поки користувач щось редагує — щоб не затерти його правку
+    const ae = document.activeElement;
+    if (ae && ae.matches && ae.matches('input,select,textarea')) { scheduleRealtimeRefresh(); return; }
+    reloadDataKeepView();
+  }, 1500);
+}
+async function reloadDataKeepView() {
+  try {
+    let allRows = [], from = 0;
+    while (true) {
+      const chunk = await sbGet('atm_data', `order=id.asc&limit=1000&offset=${from}`);
+      allRows = allRows.concat(chunk);
+      if (chunk.length < 1000) break;
+      from += 1000;
+    }
+    const dedup = arr => { const m=new Map(); arr.forEach((r,i)=>m.set(r.ID?('id:'+r.ID):('blank:'+i),r)); return [...m.values()]; };
+    sheets.active = dedup(allRows.filter(r => r.sheet==='ATM').map(r => deserializeRow(r)));
+    sheets.zap    = dedup(allRows.filter(r => r.sheet==='ZAP').map(r => deserializeRow(r)));
+    rebuildFilters(); render(); updateUI();
+    const s = document.getElementById('dbStatus');
+    if (s) s.textContent = '● Оновлено (синхронізація) · ' + new Date().toLocaleTimeString('uk-UA');
+  } catch(e) { console.error('realtime reload:', e); }
+}
+
 async function loadFromDB() {
   try {
     document.getElementById('tableWrap').innerHTML =
@@ -708,6 +698,7 @@ async function loadFromDB() {
     sheets.zap    = _dedupById(sheets.zap);
     currentSheet = 'active';
     rebuildFilters(); render(); updateUI();
+    setupRealtime();
     document.getElementById('dbStatus').textContent =
       '● ATM: ' + sheets.active.length + ' · ZAP: ' + sheets.zap.length;
     document.getElementById('info').textContent =
@@ -1791,21 +1782,15 @@ function exportExcel() {
     XLSX.utils.json_to_sheet(buildSheet(sheets.active,true),{header:fullHeaders}),'ATM');
   if (sheets.zap.length>0) XLSX.utils.book_append_sheet(wb,
     XLSX.utils.json_to_sheet(buildSheet(sheets.zap,true),{header:fullHeaders}),'ZAP');
-  // Лист журналу в Excel
-  if (db) {
-    dbGetAll('log').then(logs => {
-      logs.sort((a,b)=>new Date(b.timeISO||0)-new Date(a.timeISO||0));
-      const logRows=allLogs.map(e=>({'Час':e.log_time||'','Логін':e.login||'','ПІБ':e.user_fio||'','Дія':e.action||'','ATM ID':e.atm_id||'','Деталі':e.details||'',"Комп'ютер":e.computer||'','Браузер':e.browser||''}));
-      if (logRows.length>0) XLSX.utils.book_append_sheet(wb,XLSX.utils.json_to_sheet(logRows),'Журнал');
-      if (wb.SheetNames.length===0) XLSX.utils.book_append_sheet(wb,XLSX.utils.json_to_sheet([],{header:headers}),'ATM');
-      XLSX.writeFile(wb,`atm_export_${todayISO()}.xlsx`);
-      logAction('export','—',`ATM=${sheets.active.length}, ZAP=${sheets.zap.length}`);
-    });
-  } else {
-    if (wb.SheetNames.length===0) XLSX.utils.book_append_sheet(wb,XLSX.utils.json_to_sheet([],{header:headers}),'ATM');
-    XLSX.writeFile(wb,`atm_export_${todayISO()}.xlsx`);
+  // Лист журналу — тягнемо з Supabase
+  sbGet('atm_log', 'order=id.desc&limit=5000').then(logs => {
+    const logRows = logs.map(e=>({'Час':e.log_time||'','Логін':e.login||'','ПІБ':e.user_fio||'','Дія':e.action||'','ATM ID':e.atm_id||'','Деталі':e.details||'',"Комп'ютер":e.computer||'','Браузер':e.browser||''}));
+    if (logRows.length>0) XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(logRows), 'Журнал');
+  }).catch(()=>{}).finally(() => {
+    if (wb.SheetNames.length===0) XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet([],{header:headers}), 'ATM');
+    XLSX.writeFile(wb, `atm_export_${todayISO()}.xlsx`);
     logAction('export','—',`ATM=${sheets.active.length}, ZAP=${sheets.zap.length}`);
-  }
+  });
 }
 
 function exportReportCsv() {
