@@ -579,27 +579,43 @@ async function saveAllToServer() {
 }
 
 // При переносі ATM→ZAP: оновлюємо sheet і видаляємо старий запис
-async function launchToZap(row) {
-  const atmId = row.ID;
-  if (!atmId) return saveAllToServer();
-  try {
-    // Видаляємо з ATM
-    await sbDelete('atm_data', `atm_id=eq.${encodeURIComponent(atmId)}&sheet=eq.ATM`);
-    // Вставляємо в ZAP
-    await sbUpsert('atm_data', [rowToSB(row,'ZAP')], 'atm_id,sheet');
-  } catch(e) { console.error('launchToZap error:', e); await saveAllToServer(); }
+// PATCH — оновлює наявний рядок за фільтром (без видалення)
+async function sbPatch(table, filter, data) {
+  const r = await fetch(`${SB_URL}/rest/v1/${table}?${filter}`, {
+    method: 'PATCH',
+    headers: { 'apikey': SB_KEY, 'Authorization': 'Bearer ' + SB_KEY,
+               'Content-Type': 'application/json', 'Prefer': 'return=minimal' },
+    body: JSON.stringify(data)
+  });
+  if (!r.ok) throw new Error(await r.text());
 }
 
-// При поверненні ZAP→ATM
+// Запуск ATM→ZAP: міняємо ЛИШЕ поле sheet на тому самому рядку (без видалення)
+async function launchToZap(row) {
+  const atmId = row.ID;
+  if (!atmId) return;
+  try {
+    await sbPatch('atm_data',
+      `atm_id=eq.${encodeURIComponent(atmId)}&sheet=eq.ATM`,
+      rowToSB(row, 'ZAP'));
+  } catch(e) {
+    console.error('launchToZap error:', e);
+    alert('Не вдалося зберегти запуск у базу: ' + e.message);
+  }
+}
+
+// Повернення ZAP→ATM: так само міняємо лише sheet назад
 async function returnToActive(row) {
   const atmId = row.ID;
-  if (!atmId) return saveAllToServer();
+  if (!atmId) return;
   try {
-    // Видаляємо з ZAP
-    await sbDelete('atm_data', `atm_id=eq.${encodeURIComponent(atmId)}&sheet=eq.ZAP`);
-    // Вставляємо в ATM
-    await sbUpsert('atm_data', [rowToSB(row,'ATM')], 'atm_id,sheet');
-  } catch(e) { console.error('returnToActive error:', e); await saveAllToServer(); }
+    await sbPatch('atm_data',
+      `atm_id=eq.${encodeURIComponent(atmId)}&sheet=eq.ZAP`,
+      rowToSB(row, 'ATM'));
+  } catch(e) {
+    console.error('returnToActive error:', e);
+    alert('Не вдалося зберегти повернення у базу: ' + e.message);
+  }
 }
 
 function saveActiveToServer() { return saveAllToServer(); }
