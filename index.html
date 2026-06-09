@@ -2,6 +2,9 @@
 <html lang="uk">
 <head>
 <meta charset="UTF-8">
+<meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate">
+<meta http-equiv="Pragma" content="no-cache">
+<meta http-equiv="Expires" content="0">
 <title>ATM TBS · Ощадбанк</title>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/dist/umd/supabase.min.js"></script>
@@ -517,7 +520,7 @@ async function sbUpsert(table, data, conflict) {
 
 async function initDB() {
   try {
-    await sbGet('atm_data', 'limit=1');
+    await sbGet('atm_units', 'limit=1');
     document.getElementById('dbStatus').textContent = '● Supabase підключено';
     return true;
   } catch(e) {
@@ -558,20 +561,9 @@ function rowToSB(row, sheet) {
 // UPSERT підхід — дублі неможливі на рівні БД
 async function saveAllToServer() {
   try {
-    let all = [
-      ...sheets.active.map(r => rowToSB(r,'ATM')),
-      ...sheets.zap.map(r => rowToSB(r,'ZAP'))
-    ];
-    // Прибираємо дублі (atm_id+sheet) у межах одного запиту — лишаємо останній.
-    // Інакше Postgres кидає 21000 "ON CONFLICT cannot affect row a second time".
-    const _seen = new Map();
-    for (const _r of all) _seen.set(_r.atm_id + '|' + _r.sheet, _r);
-    all = [..._seen.values()];
-    // UPSERT по atm_id+sheet — оновлює існуючі, вставляє нові
-    if (all.length > 0) await sbUpsert('atm_data', all, 'atm_id,sheet');
-    document.getElementById('dbStatus').textContent =
-      '● Збережено · ATM: ' + sheets.active.length + ' · ZAP: ' + sheets.zap.length +
-      ' · ' + new Date().toLocaleTimeString('uk-UA');
+    for (const row of sheets.active) await persistRow(row, 'ATM');
+    for (const row of sheets.zap)    await persistRow(row, 'ZAP');
+    setSaved();
   } catch(e) {
     console.error('saveAllToServer error:', e);
     document.getElementById('dbStatus').textContent = '⚠ Помилка: ' + e.message;
@@ -590,12 +582,58 @@ async function sbPatch(table, filter, data) {
   if (!r.ok) throw new Error(await r.text());
 }
 
+// ===== Точкові операції за стабільним id (нова архітектура) =====
+async function sbInsertOne(obj) {
+  const r = await fetch(`${SB_URL}/rest/v1/atm_units`, {
+    method:'POST',
+    headers:{'apikey':SB_KEY,'Authorization':'Bearer '+SB_KEY,'Content-Type':'application/json','Prefer':'return=representation'},
+    body: JSON.stringify(obj)
+  });
+  if (!r.ok) throw new Error(await r.text());
+  const arr = await r.json();
+  return Array.isArray(arr) ? arr[0] : arr;
+}
+async function sbUpdateById(id, obj) {
+  const r = await fetch(`${SB_URL}/rest/v1/atm_units?id=eq.${id}`, {
+    method:'PATCH',
+    headers:{'apikey':SB_KEY,'Authorization':'Bearer '+SB_KEY,'Content-Type':'application/json','Prefer':'return=minimal'},
+    body: JSON.stringify(obj)
+  });
+  if (!r.ok) throw new Error(await r.text());
+}
+async function sbDeleteById(id) {
+  const r = await fetch(`${SB_URL}/rest/v1/atm_units?id=eq.${id}`, {
+    method:'DELETE',
+    headers:{'apikey':SB_KEY,'Authorization':'Bearer '+SB_KEY}
+  });
+  if (!r.ok && r.status!==404 && r.status!==406) throw new Error(await r.text());
+}
+function setSaved() {
+  const s = document.getElementById('dbStatus');
+  if (s) s.textContent = '● Збережено · ' + new Date().toLocaleTimeString('uk-UA');
+}
+// Зберегти ОДИН рядок: оновити за _sbId, або вставити новий і запам'ятати id
+async function persistRow(row, sheetName) {
+  try {
+    const data = rowToSB(row, sheetName);
+    if (row._sbId) await sbUpdateById(row._sbId, data);
+    else { const c = await sbInsertOne(data); if (c && c.id != null) row._sbId = c.id; }
+    setSaved();
+    return true;
+  } catch(e) {
+    console.error('persistRow:', e);
+    const s = document.getElementById('dbStatus');
+    if (s) s.textContent = "⚠ Помилка збереження — перевірте зʼєднання";
+    return false;
+  }
+}
+
 // Запуск ATM→ZAP: міняємо ЛИШЕ поле sheet на тому самому рядку (без видалення)
 async function launchToZap(row) {
   const atmId = row.ID;
   if (!atmId) return;
   try {
-    await sbPatch('atm_data',
+    await sbPatch('atm_units',
       `atm_id=eq.${encodeURIComponent(atmId)}&sheet=eq.ATM`,
       rowToSB(row, 'ZAP'));
   } catch(e) {
@@ -609,7 +647,7 @@ async function returnToActive(row) {
   const atmId = row.ID;
   if (!atmId) return;
   try {
-    await sbPatch('atm_data',
+    await sbPatch('atm_units',
       `atm_id=eq.${encodeURIComponent(atmId)}&sheet=eq.ZAP`,
       rowToSB(row, 'ATM'));
   } catch(e) {
@@ -648,8 +686,8 @@ function setupRealtime() {
   _rtInited = true;
   try {
     const client = window.supabase.createClient(SB_URL, SB_KEY);
-    client.channel('atm_data_rt')
-      .on('postgres_changes', { event: '*', schema: 'public', table: 'atm_data' }, () => scheduleRealtimeRefresh())
+    client.channel('atm_units_rt')
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'atm_units' }, () => scheduleRealtimeRefresh())
       .subscribe();
   } catch(e) { console.warn('Realtime init:', e); }
 }
@@ -666,7 +704,7 @@ async function reloadDataKeepView() {
   try {
     let allRows = [], from = 0;
     while (true) {
-      const chunk = await sbGet('atm_data', `order=id.asc&limit=1000&offset=${from}`);
+      const chunk = await sbGet('atm_units', `order=id.asc&limit=1000&offset=${from}`);
       allRows = allRows.concat(chunk);
       if (chunk.length < 1000) break;
       from += 1000;
@@ -703,7 +741,7 @@ async function loadFromDB() {
     // Завантажуємо всі дані з однієї таблиці
     let allRows = [], from = 0;
     while (true) {
-      const chunk = await sbGet('atm_data', `order=id.asc&limit=1000&offset=${from}`);
+      const chunk = await sbGet('atm_units', `order=id.asc&limit=1000&offset=${from}`);
       allRows = allRows.concat(chunk);
       if (chunk.length < 1000) break;
       from += 1000;
@@ -1236,13 +1274,11 @@ function updateCellSoft(idx, key, value) {
 function onCellChange(idx, key, value) {
   const rows = sheets[currentSheet];
   if (!rows[idx]) return;
-  const old = rows[idx][key];
-  if (String(old) === String(value)) return;
-  logAction('edit', rows[idx].ID||'(без ID)', `${key}: "${old}" → "${value}"`);
+  rows[idx][key] = value;
+  if (rows[idx].__meta) rows[idx].__meta.modified = todayISO();
+  logAction('edit', rows[idx].ID||'(без ID)', `${key}: "${value}"`);
   const sheet = currentSheet === 'active' ? 'ATM' : 'ZAP';
-  sbUpsert('atm_data', [rowToSB(rows[idx], sheet)], 'atm_id,sheet').catch(e => {
-    console.error('onCellChange upsert error:', e);
-  });
+  persistRow(rows[idx], sheet);
 }
 
 function updateCell(idx, key, value) {
@@ -1253,9 +1289,7 @@ function updateCell(idx, key, value) {
   if (rows[idx].__meta) rows[idx].__meta.modified = todayISO();
   logAction('edit', rows[idx].ID||'(без ID)', `${key}: "${old}" → "${value}"`);
   const _sheet = currentSheet === 'active' ? 'ATM' : 'ZAP';
-  sbUpsert('atm_data', [rowToSB(rows[idx], _sheet)], 'atm_id,sheet').catch(e => {
-    console.error('updateCell upsert error:', e);
-  });
+  persistRow(rows[idx], _sheet);
   render();
 }
 
@@ -1266,7 +1300,7 @@ function updateCellOrg(idx, value) {
   if (rows[idx].__meta) rows[idx].__meta.modified = todayISO();
   if (/^ТВБВ/i.test(String(value).trim()) && !rows[idx]['Канал']) {
     rows[idx]['Канал'] = 'ТВБВ';
-    saveSheetToDB(currentSheet).catch(()=>{});
+    persistRow(rows[idx], currentSheet === 'active' ? 'ATM' : 'ZAP');
     render();
   } else {
     refreshRow(idx);
@@ -1354,8 +1388,7 @@ function createNewRow(type) {
   });
   sheets[currentSheet].push(empty);
   logAction('add', tempId, `новий ${type} · тимчасовий ID`);
-  saveAllToServer();
-  saveSheetToDB(currentSheet).catch(()=>{});
+  persistRow(empty, currentSheet === 'active' ? 'ATM' : 'ZAP');
   render(); updateUI();
 }
 
@@ -1364,10 +1397,11 @@ function duplicateRow(idx) {
   if (!rows[idx]) return;
   const copy = JSON.parse(JSON.stringify(rows[idx]));
   copy.ID = '';
+  copy._sbId = null;
   copy.__meta = { created:todayISO(), modified:todayISO(), launchedAt:null };
   rows.splice(idx+1,0,copy);
   logAction('duplicate', rows[idx].ID||'(без ID)', 'дублікат створено');
-  saveSheetToDB(currentSheet).catch(()=>{});
+  persistRow(copy, currentSheet === 'active' ? 'ATM' : 'ZAP');
   render();
 }
 
@@ -1376,13 +1410,12 @@ async function deleteRow(idx) {
   const rows = sheets[currentSheet];
   const row = rows[idx];
   if (!row) return;
-  const id = row.ID || '';
-  const sheetName = currentSheet === 'zap' ? 'ZAP' : 'ATM';
+  const sbId = row._sbId;
   rows.splice(idx,1);
   selected.delete(idx);
-  logAction('delete', id||'(без ID)', `видалено з ${currentSheet}`);
+  logAction('delete', row.ID||'(без ID)', `видалено з ${currentSheet}`);
   try {
-    if (id) await sbDelete('atm_data', `atm_id=eq.${encodeURIComponent(id)}&sheet=eq.${sheetName}`);
+    if (sbId != null) await sbDeleteById(sbId);
   } catch(e) { console.error('deleteRow error:', e); alert('Не вдалося видалити з бази: ' + e.message); }
   render(); updateUI();
 }
@@ -1397,7 +1430,7 @@ async function launchRow(idx) {
   sheets.active.splice(idx,1);
   selected.delete(idx);
   logAction('launch', atmId||'(без ID)', '→ ZAP запущено');
-  await launchToZap(row);
+  await persistRow(row, 'ZAP');
   document.getElementById('dbStatus').textContent =
     '● Збережено · ATM: ' + sheets.active.length + ' · ZAP: ' + sheets.zap.length +
     ' · ' + new Date().toLocaleTimeString('uk-UA');
@@ -1412,7 +1445,7 @@ async function returnRow(idx) {
   sheets.active.push(row);
   sheets.zap.splice(idx,1);
   logAction('return', atmId||'(без ID)', 'ZAP → Активні');
-  await returnToActive(row);
+  await persistRow(row, 'ATM');
   document.getElementById('dbStatus').textContent =
     '● Збережено · ATM: ' + sheets.active.length + ' · ZAP: ' + sheets.zap.length +
     ' · ' + new Date().toLocaleTimeString('uk-UA');
@@ -1476,13 +1509,11 @@ function bulkCheckConditional(field) {
 }
 async function bulkDelete() {
   if (!confirm(`Видалити ${selected.size} рядків?`)) return;
-  const ids = [...selected].map(i => sheets.active[i]?.ID).filter(Boolean);
+  const sbIds = [...selected].map(i => sheets.active[i]?._sbId).filter(v => v != null);
   [...selected].sort((a,b)=>b-a).forEach(i=>sheets.active.splice(i,1));
   logAction('bulk-delete', '', `${selected.size} рядків видалено`);
   try {
-    for (const id of ids) {
-      await sbDelete('atm_data', `atm_id=eq.${encodeURIComponent(id)}&sheet=eq.ATM`);
-    }
+    for (const sbId of sbIds) await sbDeleteById(sbId);
   } catch(e) { console.error('bulkDelete error:', e); alert('Помилка видалення з бази: ' + e.message); }
   selected.clear(); render(); updateUI();
 }
