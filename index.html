@@ -1374,11 +1374,16 @@ function duplicateRow(idx) {
 async function deleteRow(idx) {
   if (!confirm('Видалити рядок?')) return;
   const rows = sheets[currentSheet];
-  const id = rows[idx]?.ID||'(без ID)';
+  const row = rows[idx];
+  if (!row) return;
+  const id = row.ID || '';
+  const sheetName = currentSheet === 'zap' ? 'ZAP' : 'ATM';
   rows.splice(idx,1);
   selected.delete(idx);
-  logAction('delete', id, `видалено з ${currentSheet}`);
-  await saveAllToServer();
+  logAction('delete', id||'(без ID)', `видалено з ${currentSheet}`);
+  try {
+    if (id) await sbDelete('atm_data', `atm_id=eq.${encodeURIComponent(id)}&sheet=eq.${sheetName}`);
+  } catch(e) { console.error('deleteRow error:', e); alert('Не вдалося видалити з бази: ' + e.message); }
   render(); updateUI();
 }
 
@@ -1471,9 +1476,14 @@ function bulkCheckConditional(field) {
 }
 async function bulkDelete() {
   if (!confirm(`Видалити ${selected.size} рядків?`)) return;
+  const ids = [...selected].map(i => sheets.active[i]?.ID).filter(Boolean);
   [...selected].sort((a,b)=>b-a).forEach(i=>sheets.active.splice(i,1));
   logAction('bulk-delete', '', `${selected.size} рядків видалено`);
-  await saveAllToServer();
+  try {
+    for (const id of ids) {
+      await sbDelete('atm_data', `atm_id=eq.${encodeURIComponent(id)}&sheet=eq.ATM`);
+    }
+  } catch(e) { console.error('bulkDelete error:', e); alert('Помилка видалення з бази: ' + e.message); }
   selected.clear(); render(); updateUI();
 }
 
