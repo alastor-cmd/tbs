@@ -664,6 +664,22 @@ async function reloadDataKeepView() {
   } catch(e) { console.error('realtime reload:', e); }
 }
 
+// Ручна заливка початкових даних — спрацьовує ТІЛЬКИ коли база справді порожня
+async function seedInitialData() {
+  if ((sheets.active && sheets.active.length) || (sheets.zap && sheets.zap.length)) {
+    alert('У базі вже є дані — заливка скасована, щоб нічого не затерти.');
+    return;
+  }
+  const raw = SEED_DATA;
+  sheets.active = (raw.ATM || []).map(r => normalizeRow(r, false));
+  sheets.zap    = (raw.ZAP || []).map(r => normalizeRow(r, true));
+  await saveAllToServer();
+  logAction('import','—',`Початкові дані залито вручну: ATM=${sheets.active.length}, ZAP=${sheets.zap.length}`);
+  rebuildFilters(); render(); updateUI();
+  alert('Початкові дані залито.');
+}
+window.seedInitialData = seedInitialData;
+
 async function loadFromDB() {
   try {
     document.getElementById('tableWrap').innerHTML =
@@ -682,11 +698,13 @@ async function loadFromDB() {
       sheets.active = atmRows;
       sheets.zap = zapRows;
     } else {
-      const raw = SEED_DATA;
-      sheets.active = (raw.ATM || []).map(r => normalizeRow(r, false));
-      sheets.zap    = (raw.ZAP || []).map(r => normalizeRow(r, true));
-      await saveAllToServer();
-      logAction('import','—',`Початкові дані: ATM=${sheets.active.length}, ZAP=${sheets.zap.length}`);
+      // База повернула 0 рядків. НЕ заливаємо seed автоматично:
+      // порожня відповідь може бути через збій читання, і автозаливка
+      // затерла б реальні дані (саме це спричиняло «відкат»).
+      // Початкові дані за потреби заливаються лише вручну (seedInitialData()).
+      sheets.active = [];
+      sheets.zap = [];
+      console.warn('loadFromDB: база повернула 0 рядків — seed НЕ заливається автоматично');
     }
     // Прибираємо дублі по ID у памʼяті (лишаємо останній; порожні ID не чіпаємо)
     const _dedupById = arr => {
