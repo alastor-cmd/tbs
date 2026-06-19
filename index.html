@@ -425,7 +425,7 @@ async function loginSuccess(login, silent) {
   document.getElementById('importBtn').style.display   = isPavelko ? '' : 'none';
   document.getElementById('updateDbBtn').style.display = isPavelko ? '' : 'none';
   document.getElementById('profilesBtn').style.display = isPavelko ? '' : 'none';
-  document.getElementById('cpBtn').style.display       = isPavelko ? '' : 'none';
+  document.getElementById('cpBtn').style.display       = '';
   document.getElementById('changePwdBtn').style.display= isPavelko ? 'none' : '';
   if (!silent) logAction('login', '—', 'Вхід у систему', login);
   await loadFromDB();
