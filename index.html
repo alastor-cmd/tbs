@@ -179,8 +179,8 @@ td.meta-cell{font-size:10px;color:var(--text-muted);white-space:nowrap;}
 /* Sticky колонки */
 .sticky-cb{position:sticky;left:0;z-index:3;background:inherit;}
 .sticky-type{position:sticky;left:32px;z-index:3;background:inherit;}
-.sticky-id{position:sticky;left:92px;z-index:3;background:inherit;}
-.sticky-adres{position:sticky;left:192px;z-index:3;background:inherit;min-width:220px;max-width:260px;}
+.sticky-id{position:sticky;left:112px;z-index:3;background:inherit;}
+.sticky-adres{position:sticky;left:212px;z-index:3;background:inherit;min-width:220px;max-width:260px;}
 th.sticky-cb,th.sticky-type,th.sticky-id,th.sticky-adres{z-index:4;}
 th.sticky-cb{background:#f5f5f4;}
 th.sticky-type{background:#f5f5f4;}
@@ -199,6 +199,20 @@ tr.row-selected td.sticky-cb,tr.row-selected td.sticky-type,tr.row-selected td.s
 .compact [data-col="SD"], .compact [data-col="Org"], .compact [data-col="Old ATM"],
 .compact [data-col="FIO"], .compact [data-col="port"], .compact [data-col="date pog"],
 .compact [data-col="Date SLO"], .compact [data-col="Date Start"], .compact [data-col="Note"]{display:none;}
+/* Картка редагування рядка */
+.card-head h3{margin:0 0 12px;font-size:16px;}
+.card-group{margin-bottom:14px;}
+.card-group-title{font-weight:700;font-size:12px;color:#0369a1;text-transform:uppercase;letter-spacing:.03em;margin-bottom:6px;border-bottom:1px solid var(--border);padding-bottom:3px;}
+.card-fields{display:grid;grid-template-columns:1fr 1fr;gap:8px 14px;}
+.card-fields label{display:flex;flex-direction:column;font-size:12px;gap:3px;color:#555;}
+.card-fields label.card-check{flex-direction:row;align-items:center;gap:7px;font-size:13px;color:#222;padding:4px 0;}
+.card-fields input[type=text],.card-fields input[type=date],.card-fields select,.card-fields textarea{padding:6px 8px;border:1px solid var(--border);border-radius:4px;font-size:13px;color:#222;font-family:inherit;}
+.card-fields input[type=checkbox]{width:18px;height:18px;}
+.card-actions{margin-top:16px;display:flex;gap:8px;justify-content:flex-end;}
+.btn-edit{background:#0369a1;color:#fff;border:1px solid #0369a1;border-radius:4px;cursor:pointer;padding:1px 4px;font-size:11px;line-height:1.4;}
+.btn-edit:hover{background:#075985;}
+.version-badge{display:inline-block;background:rgba(255,255,255,.2);color:#fff;font-size:11px;font-weight:600;padding:2px 8px;border-radius:10px;cursor:pointer;margin-left:6px;vertical-align:middle;}
+.version-badge:hover{background:rgba(255,255,255,.35);}
 </style>
 </head>
 <body>
@@ -240,6 +254,7 @@ tr.row-selected td.sticky-cb,tr.row-selected td.sticky-type,tr.row-selected td.s
 <div id="appHeader" style="display:none">
   <svg width="24" height="24" viewBox="0 0 48 48" fill="none"><rect width="48" height="48" rx="10" fill="rgba(255,255,255,.2)"/><rect x="10" y="14" width="28" height="20" rx="3" fill="white" opacity="0.9"/><rect x="14" y="22" width="8" height="8" rx="1" fill="#1e40af"/></svg>
   <h1>Редактор заявок ATM</h1>
+  <span class="version-badge" id="versionBadge" onclick="showChangelog()" title="Журнал змін">v1.2</span>
   <span class="db-status" id="dbStatus">● Завантаження...</span>
   <div class="user-badge">
     <strong id="headerUser"></strong>
@@ -256,7 +271,7 @@ tr.row-selected td.sticky-cb,tr.row-selected td.sticky-type,tr.row-selected td.s
     <button class="btn btn-primary" id="exportBtn" onclick="exportExcel()" disabled>📤 Експорт Excel</button>
     <button class="btn btn-sync" id="syncBtn" onclick="syncFromDB()">🔄 Оновити з бази</button>
     <button class="btn btn-sync" id="updateDbBtn" onclick="pushAllToDB()" style="display:none">💾 Оновити базу</button>
-    <button class="btn" id="addRowBtn" onclick="addRow()" disabled>+ Додати ТБС</button>
+    <button class="btn" id="addRowBtn" onclick="addCard()" disabled>+ Додати ТБС</button>
     <button class="btn" id="compactBtn" onclick="toggleCompact()">↔ Компактно</button>
     <button class="btn" id="reportBtn" onclick="showReport()" disabled>📊 Звіт</button>
     <button class="btn btn-log" id="logBtn" onclick="showLog()">📋 Журнал дій</button>
@@ -331,6 +346,7 @@ const USERS = {
 // ===== SESSION =====
 let currentUser = null;
 let currentUserFio = '';
+let pendingNewRow = null;
 
 // Паролі та bypass завантажуються з Supabase (таблиця atm_settings)
 // Формат: { login: { pwd_hash: '...', bypass: false } }
@@ -867,7 +883,7 @@ function loadSeedData() {
 
 // ===== COLUMNS =====
 const COLUMNS = [
-  { key:'_type', label:'Тип', type:'typebadge', width:60, sortable:true },
+  { key:'_type', label:'Тип', type:'typebadge', width:80, sortable:true },
   { key:'ID', label:'ID', type:'alnum', maxLen:10, sortable:true, width:100 },
   { key:'ADRES', label:'Адреса', type:'alnum', maxLen:64, sortable:true, wrap:true, width:260 },
   { key:'SD', label:'SD', type:'sd', sortable:true, width:140 },
@@ -1232,7 +1248,7 @@ function renderCell(row, col, idx) {
     const isIPT = row['_type'] === 'IPT';
     const color = isIPT ? 'background:#f3e8ff;color:#6d28d9' : 'background:#dbeafe;color:#1e40af';
     const label = isIPT ? 'ІПТ' : 'ATM';
-    return `<td class="sticky-type"><span style="padding:2px 8px;border-radius:10px;font-size:10px;font-weight:600;${color}">${label}</span></td>`;
+    return `<td class="sticky-type"><div style="display:flex;align-items:center;gap:4px"><button class="btn-edit" onclick="editCard(${idx})" title="Картка редагування">✏️</button><span style="padding:2px 8px;border-radius:10px;font-size:10px;font-weight:600;${color}">${label}</span></div></td>`;
   }
   if (col.type==='port') {
     const dup = v && isDuplicatePort(v,row.ADRES,idx);
@@ -1820,10 +1836,65 @@ function showReport(selectedMonth) {
             ATM ${s.atm} · ІПТ ${s.ipt} · запущено ${s.launched}
           </div>`).join('')}
       </div>
-    </div>`}`;
+    </div>`}
+    <div style="margin-top:14px;padding-top:14px;border-top:1px solid var(--border)">
+      <h3 style="font-size:12px;font-weight:600;margin-bottom:8px;color:var(--text-muted)">Активність користувачів за ${monthName} (за журналом дій)</h3>
+      <div id="userActivity" style="font-size:12px;color:#888">Завантаження…</div>
+    </div>`;
 
   document.getElementById('modalContent').innerHTML = html2;
   document.getElementById('modal').classList.add('show');
+  loadUserActivity(selectedMonth);
+}
+
+async function loadUserActivity(month) {
+  const el = document.getElementById('userActivity');
+  if (!el) return;
+  const thS = `style="text-align:left;padding:6px 8px;border-bottom:2px solid var(--border-strong);background:#f5f5f4;font-size:11px;font-weight:600"`;
+  const tdS = `style="padding:5px 8px;border-bottom:1px solid var(--border);font-size:12px"`;
+  const tdN = `style="padding:5px 8px;border-bottom:1px solid var(--border);font-size:12px;text-align:center"`;
+  try {
+    const logs = await sbGet('atm_log', 'order=id.desc&limit=5000');
+    const inMonth = (logs||[]).filter(l => String(l.timeISO||'').slice(0,7) === month);
+    const stats = {};
+    inMonth.forEach(l => {
+      const u = l.userFio || l.user || '—';
+      const s = stats[u] || (stats[u] = {fio:u, launches:0, adds:0, edits:0, dels:0, returns:0, total:0});
+      const m = String(l.details||'').match(/^(\d+)/);
+      const cnt = m ? parseInt(m[1]) : 1;
+      switch (l.action) {
+        case 'launch':      s.launches++; break;
+        case 'bulk-launch': s.launches += cnt; break;
+        case 'add':         s.adds++; break;
+        case 'duplicate':   s.adds++; break;
+        case 'edit':        s.edits++; break;
+        case 'delete':      s.dels++; break;
+        case 'bulk-delete': s.dels += cnt; break;
+        case 'return':      s.returns++; break;
+        default: return;
+      }
+      s.total++;
+    });
+    const arr = Object.values(stats).sort((a,b) => b.launches - a.launches);
+    if (!arr.length) { el.innerHTML = '<div style="color:#888">За цей місяць дій у журналі немає.</div>'; return; }
+    let html = `<table style="width:100%;border-collapse:collapse">
+      <thead><tr>
+        <th ${thS}>Користувач</th><th ${thS}>Запуски</th><th ${thS}>Додавання</th>
+        <th ${thS}>Редагування</th><th ${thS}>Видалення</th><th ${thS}>Повернення</th>
+      </tr></thead><tbody>`;
+    arr.forEach(s => { html += `<tr>
+      <td ${tdS}>${escapeHtml(s.fio)}</td>
+      <td ${tdN} style="font-weight:700;color:var(--ok)">${s.launches}</td>
+      <td ${tdN}>${s.adds}</td>
+      <td ${tdN}>${s.edits}</td>
+      <td ${tdN}>${s.dels}</td>
+      <td ${tdN}>${s.returns}</td>
+    </tr>`; });
+    html += `</tbody></table>`;
+    el.innerHTML = html;
+  } catch(e) {
+    el.innerHTML = '<div style="color:#b91c1c">Не вдалося завантажити активність: ' + escapeHtml(e.message) + '</div>';
+  }
 }
 
 function exportMonthReport(selectedMonth) {
@@ -1848,6 +1919,143 @@ function exportMonthReport(selectedMonth) {
   XLSX.writeFile(wb, `atm_report_${selectedMonth}.xlsx`);
   logAction('export', '—', `Звіт за ${monthName}: ${rows.length} пристроїв`);
 }
+// ===== Картка редагування рядка =====
+const CARD_GROUPS = [
+  { title:'Опис', keys:['_type','ID','ADRES','SD','Org','Old ATM','FIO'] },
+  { title:'Етапи', keys:['dogovir','DIS','BEC','Limi','ТМК','Сигналізація','СБОН'] },
+  { title:'Технічні', keys:['Канал','port'] },
+  { title:'Дати', keys:['date pog','Date SLO','Date Start'] },
+  { title:'Примітка', keys:['Note'] },
+];
+let cardRow = null, cardMode = 'edit', cardIdx = -1;
+function cardFieldHtml(col, row) {
+  const v = row[col.key] ?? '';
+  const dk = `data-key="${col.key}"`;
+  const isIPT = row._type === 'IPT';
+  if (col.type==='check-atm' && isIPT) return '';
+  if (col.type==='check-ipt' && !isIPT) return '';
+  if (col.key==='_type' || col.type==='typebadge') {
+    return `<label>${col.label}<select ${dk} onchange="onCardTypeChange(this)"><option value="ATM"${v==='ATM'?' selected':''}>ATM</option><option value="IPT"${v==='IPT'?' selected':''}>ІПТ</option></select></label>`;
+  }
+  if (col.type==='select') {
+    let opts = (col.options||[]).slice();
+    if (v && !opts.map(String).includes(String(v))) opts.unshift(String(v));
+    const optsHtml = opts.map(o=>`<option value="${o}"${String(v)===String(o)?' selected':''}>${o||'—'}</option>`).join('');
+    return `<label>${col.label}<select ${dk}>${optsHtml}</select></label>`;
+  }
+  if (col.type==='check' || col.type==='check-atm' || col.type==='check-ipt') {
+    return `<label class="card-check"><input type="checkbox" ${dk} ${v===true?'checked':''}> ${col.label}</label>`;
+  }
+  if (col.type==='note') {
+    return `<label>${col.label}<textarea ${dk} rows="2">${String(v)}</textarea></label>`;
+  }
+  if (col.type==='date') {
+    return `<label>${col.label}<input type="date" ${dk} value="${String(v).replace(/"/g,'&quot;')}"></label>`;
+  }
+  return `<label>${col.label}<input type="text" ${dk} value="${String(v).replace(/"/g,'&quot;')}"></label>`;
+}
+function readCardInto(row) {
+  document.querySelectorAll('#modalContent [data-key]').forEach(el => {
+    const k = el.getAttribute('data-key');
+    if (el.type==='checkbox') row[k] = el.checked;
+    else row[k] = el.value;
+  });
+}
+function onCardTypeChange(sel) {
+  if (!cardRow) return;
+  readCardInto(cardRow);
+  if (cardMode==='add' && /^[AK]\d{7}$/.test(String(cardRow.ID||''))) cardRow.ID = generateTempId(cardRow._type);
+  renderCardBody();
+}
+function renderCardBody() {
+  const byKey = {}; COLUMNS.forEach(c => byKey[c.key] = c);
+  const title = cardMode==='add' ? 'Новий запис' : ('Картка: ' + (cardRow.ID || '(без ID)'));
+  let html = `<div class="card-head"><h3>${title}</h3></div>`;
+  CARD_GROUPS.forEach(g => {
+    html += `<div class="card-group"><div class="card-group-title">${g.title}</div><div class="card-fields">`;
+    g.keys.forEach(k => { const col = byKey[k]; if (col) html += cardFieldHtml(col, cardRow); });
+    html += `</div></div>`;
+  });
+  if (cardMode==='add')
+    html += `<div class="card-actions"><button class="btn" onclick="cancelNewCard()">Скасувати</button><button class="btn btn-primary" onclick="saveNewCard()">Створити</button></div>`;
+  else
+    html += `<div class="card-actions"><button class="btn" onclick="closeModal()">Закрити</button><button class="btn btn-primary" onclick="saveCard()">Зберегти</button></div>`;
+  document.getElementById('modalContent').innerHTML = html;
+  document.getElementById('modal').classList.add('show');
+}
+function addCard() {
+  if (!currentUser) { alert('Спершу увійдіть у систему.'); return; }
+  cardRow = {};
+  COLUMNS.forEach(c => { cardRow[c.key] = (c.type==='check'||c.type==='check-atm'||c.type==='check-ipt') ? false : ''; });
+  cardRow._type = 'ATM';
+  cardRow.ID = generateTempId(cardRow._type);
+  cardRow.FIO = (currentUserFio || '').split(' ')[0] || '';
+  cardRow._sbId = null;
+  cardRow.__meta = { created:todayISO(), modified:todayISO(), launchedAt:null };
+  cardMode = 'add'; cardIdx = -1; pendingNewRow = cardRow;
+  renderCardBody();
+}
+function cancelNewCard() { pendingNewRow = null; cardRow = null; closeModal(); }
+function saveNewCard() {
+  if (!cardRow) { closeModal(); return; }
+  readCardInto(cardRow);
+  let id = String(cardRow.ID || '').trim();
+  if (!id) id = generateTempId(cardRow._type);
+  if (sheets[currentSheet].some(r => String(r.ID||'').trim() === id)) { alert('Запис з таким ID уже є в цьому списку.'); return; }
+  cardRow.ID = id;
+  cardRow.__meta.modified = todayISO();
+  sheets[currentSheet].push(cardRow);
+  persistRow(cardRow, currentSheet==='active' ? 'ATM' : 'ZAP');
+  logAction('add', id, 'новий запис через картку', currentUser);
+  pendingNewRow = null; cardRow = null;
+  render(); updateUI(); closeModal();
+}
+function editCard(idx) {
+  const row = sheets[currentSheet][idx];
+  if (!row) return;
+  cardRow = row; cardMode = 'edit'; cardIdx = idx; pendingNewRow = null;
+  renderCardBody();
+}
+function saveCard() {
+  if (!cardRow) { closeModal(); return; }
+  readCardInto(cardRow);
+  if (cardRow.__meta) cardRow.__meta.modified = todayISO();
+  persistRow(cardRow, currentSheet==='active' ? 'ATM' : 'ZAP');
+  render();
+  closeModal();
+}
+
+// ===== Версіонність =====
+const APP_VERSION = '1.2';
+const CHANGELOG = [
+  { v:'1.2', date:'2026-06', items:[
+    'Детальна статистика активності користувачів у звіті: запуски, додавання, редагування, видалення, повернення за місяць',
+    'Картка редагування рядка (✏️): усі поля об\'єкта згруповані по секціях',
+    'Додавання нового запису через картку; ФІО створювача підставляється автоматично',
+    'Авто-присвоєння ID, як раніше (A для ATM / K для ІПТ + номер)',
+    'Етапи залежать від типу: Ліміти — для ATM, СБОН — для ІПТ (оновлюється миттєво при зміні типу)',
+    'Компактний режим (кнопка «Компактно») і візуальні групи стовпців',
+    'Закріплені заголовок таблиці та стовпці Тип / ID / Адреса',
+    'Поля дат — з календарем',
+    'Фільтр по ФІО більше не скидається при внесенні даних',
+  ]},
+  { v:'1.1', date:'2026-06', items:[
+    'Точкова архітектура даних: правки/видалення/запуск по одному рядку (без вимивання й дублів)',
+    'Окрема база даних; два хости (GitHub Pages + Firebase) з автодеплоєм',
+  ]},
+];
+function showChangelog() {
+  let html = `<div class="card-head"><h3>Журнал змін</h3></div>`;
+  CHANGELOG.forEach(rel => {
+    html += `<div class="card-group"><div class="card-group-title">Версія ${rel.v}${rel.date?' · '+rel.date:''}</div><ul style="margin:6px 0 0;padding-left:18px;font-size:13px;color:#333;line-height:1.5">`;
+    rel.items.forEach(it => html += `<li style="margin:3px 0">${it}</li>`);
+    html += `</ul></div>`;
+  });
+  html += `<div class="card-actions"><button class="btn btn-primary" onclick="closeModal()">Закрити</button></div>`;
+  document.getElementById('modalContent').innerHTML = html;
+  document.getElementById('modal').classList.add('show');
+}
+
 function closeModal() { document.getElementById('modal').classList.remove('show'); }
 
 // ===== EXPORT EXCEL =====
